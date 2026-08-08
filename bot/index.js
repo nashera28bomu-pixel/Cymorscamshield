@@ -10,6 +10,7 @@ const { checkSSL } = require('../services/sslService');
 const { checkSafeBrowsing } = require('../services/safeBrowsingService');
 const { checkLookalike } = require('../services/lookalikeService');
 const { checkVirusTotal } = require('../services/virusTotalService');
+const { runFallbackAnalysis } = require('../services/fallbackScamEngine');
 const { computeRisk } = require('../services/riskEngine');
 const { analyzeScreenshot } = require('../services/visionService');
 const { generateScanPDF } = require('../services/pdfService');
@@ -85,10 +86,10 @@ Every link is checked across:
 • Domain age
 • SSL certificate validity
 • Google Safe Browsing threat database
-• VirusTotal — 70+ security vendor engines
+• VirusTotal — 70+ security vendor engines (with a built-in pattern-analysis backup if VirusTotal is ever unavailable)
 • Brand impersonation (lookalike domains)
 
-Every result comes with plain-language reasons, a full PDF report, and a risk score from 0–100.
+Every result comes with plain-language reasons for *every* check — not just the bad ones — plus a clear conclusion telling you whether to trust the link, and a full PDF report.
 
 Forward a screenshot of a suspicious WhatsApp/SMS message and I'll analyze the text and any links in it too.`);
 });
@@ -105,7 +106,10 @@ async function runFullCheck(rawInput) {
   ]);
   const lookalike = checkLookalike(hostname);
 
-  const result = computeRisk({ whois, ssl, safeBrowsing, lookalike, virusTotal });
+  const vtUsable = virusTotal && !virusTotal.skipped && !virusTotal.error && !virusTotal.pending;
+  const fallback = vtUsable ? null : runFallbackAnalysis(url, hostname);
+
+  const result = computeRisk({ whois, ssl, safeBrowsing, lookalike, virusTotal, fallback });
   return { url, result };
 }
 
@@ -124,6 +128,7 @@ async function handleCheck(ctx, rawInput) {
       verdict: result.verdict,
       reasons: result.reasons,
       checks: result.checks,
+      conclusion: result.conclusion,
     });
 
     user.checksUsed += 1;
@@ -136,7 +141,10 @@ async function handleCheck(ctx, rawInput) {
 🔗 ${url}
 
 *Why:*
-${reasonsText}`, Markup.inlineKeyboard([
+${reasonsText}
+
+*Conclusion:*
+${result.conclusion}`, Markup.inlineKeyboard([
       Markup.button.callback('📄 Get PDF Report', `pdf_${user.telegramId}`),
     ]));
 
@@ -215,7 +223,14 @@ bot.action(/pdf_(.+)/, async (ctx) => {
 
   await ctx.answerCbQuery('Generating PDF...');
   const emoji = lastScan.score >= 60 ? '🔴' : lastScan.score >= 30 ? '🟡' : '🟢';
-  const result = { score: lastScan.score, verdict: lastScan.verdict, emoji, reasons: lastScan.reasons, checks: lastScan.checks };
+  const result = {
+    score: lastScan.score,
+    verdict: lastScan.verdict,
+    emoji,
+    reasons: lastScan.reasons,
+    checks: lastScan.checks,
+    conclusion: lastScan.conclusion || 'Review the findings above to decide whether to trust this link.',
+  };
 
   const filePath = path.join('/tmp', `scan_${Date.now()}.pdf`);
   await generateScanPDF({ url: lastScan.input, result, scanDate: new Date().toLocaleString(), filePath });
