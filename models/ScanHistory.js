@@ -8,6 +8,8 @@ const scanSchema = new mongoose.Schema({
   verdict: String,
   reasons: [String],
   checks: Array,
+  conclusion: String,
+  contentHash: String,
 }, { timestamps: true });
 
 module.exports = mongoose.model('ScanHistory', scanSchema);
