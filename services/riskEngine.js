@@ -1,4 +1,4 @@
-function computeRisk({ whois, ssl, safeBrowsing, lookalike, virusTotal, fallback }) {
+function computeRisk({ whois, ssl, safeBrowsing, lookalike, virusTotal, fallback, content, templateMatchCount }) {
   let score = 0;
   const reasons = [];
   const checks = [];
@@ -45,19 +45,18 @@ function computeRisk({ whois, ssl, safeBrowsing, lookalike, virusTotal, fallback
     checks.push({ name: 'Google Safe Browsing', result: 'Not configured', status: 'warn' });
   }
 
-  // Brand impersonation
+  // Brand impersonation (domain-name similarity)
   if (lookalike.suspicious) {
     score += 25;
     reasons.push(`This domain closely resembles "${lookalike.realDomain}" (the official ${lookalike.mimics} site) but is not an exact match. Registering near-identical domains is a classic impersonation tactic used to trick people into believing they're on the real, trusted site.`);
-    checks.push({ name: 'Brand Impersonation', result: `Mimics ${lookalike.mimics}`, status: 'fail' });
+    checks.push({ name: 'Brand Impersonation (domain)', result: `Mimics ${lookalike.mimics}`, status: 'fail' });
   } else {
-    reasons.push('This domain was checked against known Kenyan brands (Safaricom, M-Pesa, KRA, NTSA, HELB, banks, eCitizen) and does not closely resemble any of them, so it does not appear to be impersonating a trusted institution.');
-    checks.push({ name: 'Brand Impersonation', result: 'No known brand match', status: 'pass' });
+    reasons.push('This domain was checked against known Kenyan brands (Safaricom, M-Pesa, KRA, NTSA, HELB, banks, eCitizen) and does not closely resemble any of them, so it does not appear to be impersonating a trusted institution by name.');
+    checks.push({ name: 'Brand Impersonation (domain)', result: 'No known brand match', status: 'pass' });
   }
 
-  // VirusTotal (detailed) or fallback engine
+  // VirusTotal or fallback pattern engine
   let vtUsable = virusTotal && !virusTotal.skipped && !virusTotal.error && !virusTotal.pending;
-
   if (vtUsable) {
     const total = (virusTotal.malicious || 0) + (virusTotal.suspicious || 0) + (virusTotal.harmless || 0) + (virusTotal.undetected || 0);
     if (virusTotal.malicious > 0) {
@@ -73,14 +72,9 @@ function computeRisk({ whois, ssl, safeBrowsing, lookalike, virusTotal, fallback
       reasons.push(`VirusTotal aggregates results from over 70 independent antivirus and security engines. All of them — ${virusTotal.harmless + virusTotal.undetected} in total — returned a clean result for this link, which is a strong positive signal.`);
       checks.push({ name: 'VirusTotal (70+ engines)', result: 'Clean across all vendors', status: 'pass' });
     }
-    if (virusTotal.categories && Object.keys(virusTotal.categories).length > 0) {
-      const cats = [...new Set(Object.values(virusTotal.categories))].slice(0, 3).join(', ');
-      reasons.push(`Security vendors categorize this site as: ${cats}.`);
-    }
   } else {
-    // Fallback engine takes over
     const fb = fallback;
-    score += Math.round(fb.score * 0.5); // weighted lower than a real multi-engine scan
+    score += Math.round(fb.score * 0.5);
     fb.findings.forEach(f => reasons.push(f.reason));
     const worstStatus = fb.findings.some(f => f.status === 'fail') ? 'fail' : fb.findings.some(f => f.status === 'warn') ? 'warn' : 'pass';
     checks.push({
@@ -88,6 +82,30 @@ function computeRisk({ whois, ssl, safeBrowsing, lookalike, virusTotal, fallback
       result: virusTotal?.pending ? 'VT still processing — used backup engine' : virusTotal?.error ? 'VT unavailable — used backup engine' : 'VT not configured — used backup engine',
       status: worstStatus,
     });
+  }
+
+  // Content/frontend analysis — the deep-inspection layer
+  if (content && content.pageChecked) {
+    score += content.score;
+    content.findings.forEach(f => reasons.push(f.reason));
+    const worst = content.findings.some(f => f.status === 'fail') ? 'fail' : content.findings.some(f => f.status === 'warn') ? 'warn' : 'pass';
+    const summary = content.findings.length === 1 && content.findings[0].status === 'pass'
+      ? 'No red flags in page content'
+      : `${content.findings.length} finding(s) — see breakdown`;
+    checks.push({ name: 'Page Content Analysis', result: summary, status: worst });
+  } else if (content) {
+    score += content.score;
+    content.findings.forEach(f => reasons.push(f.reason));
+    checks.push({ name: 'Page Content Analysis', result: 'Page could not be fully loaded', status: 'warn' });
+  }
+
+  // Template reuse (crowdsourced)
+  if (templateMatchCount && templateMatchCount > 0) {
+    score += 35;
+    reasons.push(`This page's content closely matches ${templateMatchCount} other page(s) previously reported as scams by other users. Scammers frequently reuse the same page template across many different domains — matching a known scam template is a very strong indicator.`);
+    checks.push({ name: 'Known Scam Template Match', result: `Matches ${templateMatchCount} reported page(s)`, status: 'fail' });
+  } else {
+    checks.push({ name: 'Known Scam Template Match', result: 'No match in reported database', status: 'pass' });
   }
 
   score = Math.min(score, 100);
@@ -102,12 +120,12 @@ function computeRisk({ whois, ssl, safeBrowsing, lookalike, virusTotal, fallback
 
 function buildConclusion(score, verdict) {
   if (verdict === 'HIGH RISK') {
-    return `This link shows strong, multiple indicators of being a scam or malicious site. Do not enter any personal details, PINs, passwords, or payment information. Do not click further links from the same sender. If you already entered information, change your passwords and contact your bank or Safaricom immediately.`;
+    return `This link shows strong, multiple indicators of being a scam or malicious site — including at the page-content level, not just the domain. Do not enter any personal details, PINs, passwords, or payment information. Do not click further links from the same sender. If you already entered information, change your passwords and contact your bank or Safaricom immediately.`;
   }
   if (verdict === 'MEDIUM RISK') {
     return `This link has some warning signs but nothing conclusive. Proceed only with caution: avoid entering sensitive information (PINs, passwords, card details) unless you can independently confirm the site is legitimate — for example, by checking the official website or contacting the company directly through a known phone number. When in doubt, don't click.`;
   }
-  return `This link passed all major checks with no significant red flags. It appears safe based on current data. As with any link, avoid sharing your PIN or password unless you're certain of who's asking, since even legitimate-looking sites can be compromised.`;
+  return `This link passed all major checks — including domain, security engine, and live page content analysis — with no significant red flags. It appears safe based on current data. As with any link, avoid sharing your PIN or password unless you're certain of who's asking, since even legitimate-looking sites can be compromised.`;
 }
 
 module.exports = { computeRisk };
