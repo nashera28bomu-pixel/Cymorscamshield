@@ -9,6 +9,7 @@ const { getDomainAge } = require('../services/whoisService');
 const { checkSSL } = require('../services/sslService');
 const { checkSafeBrowsing } = require('../services/safeBrowsingService');
 const { checkLookalike } = require('../services/lookalikeService');
+const { checkVirusTotal } = require('../services/virusTotalService');
 const { computeRisk } = require('../services/riskEngine');
 const { analyzeScreenshot } = require('../services/visionService');
 const { generateScanPDF } = require('../services/pdfService');
@@ -84,6 +85,7 @@ Every link is checked across:
 • Domain age
 • SSL certificate validity
 • Google Safe Browsing threat database
+• VirusTotal — 70+ security vendor engines
 • Brand impersonation (lookalike domains)
 
 Every result comes with plain-language reasons, a full PDF report, and a risk score from 0–100.
@@ -95,14 +97,15 @@ async function runFullCheck(rawInput) {
   const url = extractUrl(rawInput) || rawInput;
   const hostname = url.replace(/^https?:\/\//, '').split('/')[0];
 
-  const [whois, ssl, safeBrowsing] = await Promise.all([
+  const [whois, ssl, safeBrowsing, virusTotal] = await Promise.all([
     getDomainAge(hostname),
     checkSSL(hostname),
     checkSafeBrowsing(url),
+    checkVirusTotal(url),
   ]);
   const lookalike = checkLookalike(hostname);
 
-  const result = computeRisk({ whois, ssl, safeBrowsing, lookalike });
+  const result = computeRisk({ whois, ssl, safeBrowsing, lookalike, virusTotal });
   return { url, result };
 }
 
