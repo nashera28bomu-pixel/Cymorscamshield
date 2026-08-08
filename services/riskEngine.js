@@ -1,4 +1,4 @@
-function computeRisk({ whois, ssl, safeBrowsing, lookalike }) {
+function computeRisk({ whois, ssl, safeBrowsing, lookalike, virusTotal }) {
   let score = 0;
   const reasons = [];
   const checks = [];
@@ -46,13 +46,34 @@ function computeRisk({ whois, ssl, safeBrowsing, lookalike }) {
     checks.push({ name: 'Brand Impersonation', result: 'No known brand match', status: 'pass' });
   }
 
+  if (virusTotal && !virusTotal.skipped && !virusTotal.error && !virusTotal.pending) {
+    const total = (virusTotal.malicious || 0) + (virusTotal.suspicious || 0) + (virusTotal.harmless || 0) + (virusTotal.undetected || 0);
+    if (virusTotal.malicious > 0) {
+      score += 45;
+      reasons.push(`${virusTotal.malicious} out of ${total} independent security vendors on VirusTotal have flagged this URL as malicious. This is one of the most reliable signals available, since it reflects real-world detections across dozens of antivirus and threat-intelligence engines, not a single source.`);
+      checks.push({ name: 'VirusTotal (70+ engines)', result: `${virusTotal.malicious} flagged malicious`, status: 'fail' });
+    } else if (virusTotal.suspicious > 0) {
+      score += 18;
+      reasons.push(`${virusTotal.suspicious} security vendor(s) on VirusTotal marked this URL as suspicious, though not confirmed malicious. Treat with caution and avoid entering personal or payment information.`);
+      checks.push({ name: 'VirusTotal (70+ engines)', result: `${virusTotal.suspicious} suspicious`, status: 'warn' });
+    } else {
+      checks.push({ name: 'VirusTotal (70+ engines)', result: 'Clean across all vendors', status: 'pass' });
+    }
+  } else {
+    checks.push({
+      name: 'VirusTotal (70+ engines)',
+      result: virusTotal?.pending ? 'Scan still processing' : virusTotal?.error ? 'Check failed' : 'Not configured',
+      status: 'warn',
+    });
+  }
+
   score = Math.min(score, 100);
   let verdict = 'LOW RISK', emoji = '🟢';
   if (score >= 60) { verdict = 'HIGH RISK'; emoji = '🔴'; }
   else if (score >= 30) { verdict = 'MEDIUM RISK'; emoji = '🟡'; }
 
   if (reasons.length === 0) {
-    reasons.push('No red flags were detected across domain age, SSL certificate validity, threat databases, or brand impersonation checks. This does not guarantee full safety — always stay cautious with links asking for money or personal details.');
+    reasons.push('No red flags were detected across domain age, SSL certificate validity, threat databases, brand impersonation, and multi-engine malware scanning. This does not guarantee full safety — always stay cautious with links asking for money or personal details.');
   }
 
   return { score, verdict, emoji, reasons, checks };
