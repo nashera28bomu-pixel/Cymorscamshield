@@ -11,6 +11,7 @@ const { checkSafeBrowsing } = require('../services/safeBrowsingService');
 const { checkLookalike } = require('../services/lookalikeService');
 const { checkVirusTotal } = require('../services/virusTotalService');
 const { runFallbackAnalysis } = require('../services/fallbackScamEngine');
+const { analyzeContent } = require('../services/contentAnalysisService');
 const { computeRisk } = require('../services/riskEngine');
 const { analyzeScreenshot } = require('../services/visionService');
 const { generateScanPDF } = require('../services/pdfService');
@@ -86,10 +87,12 @@ Every link is checked across:
 • Domain age
 • SSL certificate validity
 • Google Safe Browsing threat database
-• VirusTotal — 70+ security vendor engines (with a built-in pattern-analysis backup if VirusTotal is ever unavailable)
-• Brand impersonation (lookalike domains)
+• VirusTotal — 70+ security vendor engines (with a pattern-analysis backup if unavailable)
+• Brand impersonation (domain name)
+• *Live page content analysis* — login forms, where they submit to, brand mismatch, cloned assets, redirect chains
+• Known scam template matching — crowdsourced from other users' reports
 
-Every result comes with plain-language reasons for *every* check — not just the bad ones — plus a clear conclusion telling you whether to trust the link, and a full PDF report.
+Every result comes with plain-language reasons for *every* check, a clear conclusion telling you whether to trust the link, and a full PDF report.
 
 Forward a screenshot of a suspicious WhatsApp/SMS message and I'll analyze the text and any links in it too.`);
 });
@@ -98,27 +101,33 @@ async function runFullCheck(rawInput) {
   const url = extractUrl(rawInput) || rawInput;
   const hostname = url.replace(/^https?:\/\//, '').split('/')[0];
 
-  const [whois, ssl, safeBrowsing, virusTotal] = await Promise.all([
+  const [whois, ssl, safeBrowsing, virusTotal, content] = await Promise.all([
     getDomainAge(hostname),
     checkSSL(hostname),
     checkSafeBrowsing(url),
     checkVirusTotal(url),
+    analyzeContent(url, hostname),
   ]);
   const lookalike = checkLookalike(hostname);
 
   const vtUsable = virusTotal && !virusTotal.skipped && !virusTotal.error && !virusTotal.pending;
   const fallback = vtUsable ? null : runFallbackAnalysis(url, hostname);
 
-  const result = computeRisk({ whois, ssl, safeBrowsing, lookalike, virusTotal, fallback });
-  return { url, result };
+  let templateMatchCount = 0;
+  if (content?.contentHash) {
+    templateMatchCount = await ScamReport.countDocuments({ contentHash: content.contentHash });
+  }
+
+  const result = computeRisk({ whois, ssl, safeBrowsing, lookalike, virusTotal, fallback, content, templateMatchCount });
+  return { url, result, contentHash: content?.contentHash || null };
 }
 
 async function handleCheck(ctx, rawInput) {
   const user = await getOrCreateUser(ctx);
-  await ctx.reply('🔍 Checking... this takes a few seconds.');
+  await ctx.reply('🔍 Checking... this takes a few seconds — analyzing domain, security engines, and live page content.');
 
   try {
-    const { url, result } = await runFullCheck(rawInput);
+    const { url, result, contentHash } = await runFullCheck(rawInput);
 
     await ScanHistory.create({
       telegramId: user.telegramId,
@@ -129,6 +138,7 @@ async function handleCheck(ctx, rawInput) {
       reasons: result.reasons,
       checks: result.checks,
       conclusion: result.conclusion,
+      contentHash,
     });
 
     user.checksUsed += 1;
@@ -253,8 +263,16 @@ bot.command('history', async (ctx) => {
 bot.command('report', async (ctx) => {
   const input = ctx.message.text.split(' ').slice(1).join(' ').trim();
   if (!input) return ctx.reply('Usage: /report <link>');
-  await ScamReport.create({ reportedUrl: input, reportedBy: String(ctx.from.id) });
-  await ctx.reply('✅ Thanks for reporting. This helps improve detection for everyone.');
+
+  const telegramId = String(ctx.from.id);
+  const recentScan = await ScanHistory.findOne({ telegramId, input: { $regex: input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') } }).sort({ createdAt: -1 });
+
+  await ScamReport.create({
+    reportedUrl: input,
+    reportedBy: telegramId,
+    contentHash: recentScan?.contentHash || null,
+  });
+  await ctx.reply('✅ Thanks for reporting. This page has been added to the shared scam-template database — future scans of similar pages will now flag it automatically.');
 });
 
 bot.command('referral', async (ctx) => {
