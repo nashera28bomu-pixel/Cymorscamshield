@@ -1,79 +1,109 @@
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 
+const C = {
+  navy: '#0B2545', teal: '#12877F', lightBg: '#F4F7FA', border: '#D8E0EA',
+  text: '#1A1A1A', pass: '#1E8E3E', warn: '#E8A33D', fail: '#D93025',
+};
+
+const riskColor = v => v === 'HIGH RISK' ? C.fail : v === 'MEDIUM RISK' ? C.warn : C.pass;
+const statusColor = s => s === 'pass' ? C.pass : s === 'warn' ? C.warn : C.fail;
+const statusLabel = s => s === 'pass' ? 'PASS' : s === 'warn' ? 'CAUTION' : 'FAIL';
+
 function generateScanPDF({ url, result, scanDate, filePath }) {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    const doc = new PDFDocument({ margin: 0, size: 'A4' });
     const stream = fs.createWriteStream(filePath);
     doc.pipe(stream);
 
-    const navy = '#0B2545';
-    const teal = '#12877F';
-    const riskColors = { 'LOW RISK': '#1E8E3E', 'MEDIUM RISK': '#E8A33D', 'HIGH RISK': '#D93025' };
-    const riskColor = riskColors[result.verdict] || '#333333';
+    const pageW = doc.page.width, marginX = 40, contentW = pageW - marginX * 2;
+    const vColor = riskColor(result.verdict);
 
     // Letterhead
-    doc.rect(0, 0, doc.page.width, 90).fill(navy);
-    doc.fillColor('#ffffff').fontSize(22).font('Helvetica-Bold').text('CYMOR SCAM SHIELD', 40, 28);
-    doc.fontSize(10).font('Helvetica').fillColor('#B8C4D9').text('Link & Website Risk Report', 40, 56);
-    doc.fontSize(9).fillColor('#B8C4D9').text(`Generated: ${scanDate}`, 40, 72);
+    doc.rect(0, 0, pageW, 80).fill(C.navy);
+    doc.circle(56, 40, 16).fill(C.teal);
+    doc.fillColor('#ffffff').fontSize(9).font('Helvetica-Bold').text('CS', 50, 34);
+    doc.fillColor('#ffffff').fontSize(19).font('Helvetica-Bold').text('CYMOR SCAM SHIELD', 84, 22);
+    doc.fontSize(9).font('Helvetica').fillColor('#AFC0D6').text('Link & Website Risk Report', 84, 46);
+    doc.fontSize(8).fillColor('#8FA3BF').text(`Generated: ${scanDate}`, 84, 60);
 
-    let y = 110;
+    let y = 96;
 
     // Scanned link box
-    doc.roundedRect(40, y, doc.page.width - 80, 46, 4).fillAndStroke('#F2F5F9', '#D8E0EA');
-    doc.fillColor(navy).fontSize(10).font('Helvetica-Bold').text('SCANNED LINK', 50, y + 8);
-    doc.fillColor('#111111').fontSize(10).font('Helvetica').text(url, 50, y + 22, { width: doc.page.width - 100 });
-    y += 66;
+    doc.roundedRect(marginX, y, contentW, 40, 4).fillAndStroke(C.lightBg, C.border);
+    doc.fillColor(C.navy).fontSize(8).font('Helvetica-Bold').text('SCANNED LINK', marginX + 10, y + 7);
+    doc.fillColor(C.text).fontSize(9.5).font('Helvetica').text(url, marginX + 10, y + 19, { width: contentW - 20, ellipsis: true });
+    y += 52;
 
     // Verdict banner
-    doc.roundedRect(40, y, doc.page.width - 80, 50, 4).fill(riskColor);
-    doc.fillColor('#ffffff').fontSize(16).font('Helvetica-Bold').text(`${result.emoji}  ${result.verdict}  —  ${result.score}/100`, 50, y + 15);
-    y += 72;
+    doc.roundedRect(marginX, y, contentW, 54, 4).fill(vColor);
+    doc.circle(marginX + 22, y + 27, 8).fill('#ffffff');
+    doc.circle(marginX + 22, y + 27, 5).fill(vColor);
+    doc.fillColor('#ffffff').fontSize(15).font('Helvetica-Bold').text(result.verdict, marginX + 40, y + 10);
+    doc.fontSize(10).font('Helvetica').text(`Risk Score: ${result.score} / 100`, marginX + 40, y + 30);
+    const barX = marginX + contentW - 160, barY = y + 20, barW = 140, barH = 12;
+    doc.roundedRect(barX, barY, barW, barH, 6).fillOpacity(0.25).fill('#ffffff').fillOpacity(1);
+    doc.roundedRect(barX, barY, (barW * result.score) / 100, barH, 6).fill('#ffffff');
+    y += 66;
 
     // Checks table
-    doc.fillColor(navy).fontSize(13).font('Helvetica-Bold').text('Detailed Checks', 40, y);
-    y += 20;
+    doc.fillColor(C.navy).fontSize(11).font('Helvetica-Bold').text('Detailed Checks', marginX, y);
+    y += 16;
 
-    const colX = [40, 260, 400];
-    const rowH = 24;
-
-    doc.rect(40, y, doc.page.width - 80, rowH).fill(teal);
-    doc.fillColor('#ffffff').fontSize(10).font('Helvetica-Bold');
-    doc.text('Check', colX[0] + 8, y + 7);
-    doc.text('Result', colX[1] + 8, y + 7);
-    doc.text('Status', colX[2] + 8, y + 7);
+    const col1 = marginX, col2 = marginX + 170, col3 = marginX + 340;
+    const rowH = 20;
+    doc.rect(marginX, y, contentW, rowH).fill(C.teal);
+    doc.fillColor('#ffffff').fontSize(8.5).font('Helvetica-Bold');
+    doc.text('CHECK', col1 + 8, y + 6);
+    doc.text('RESULT', col2 + 8, y + 6);
+    doc.text('STATUS', col3 + 8, y + 6);
     y += rowH;
 
     result.checks.forEach((c, i) => {
-      const bg = i % 2 === 0 ? '#F7F9FB' : '#EDF1F5';
-      doc.rect(40, y, doc.page.width - 80, rowH).fill(bg);
-      doc.fillColor('#111111').fontSize(9.5).font('Helvetica');
-      doc.text(c.name, colX[0] + 8, y + 7, { width: 210 });
-      doc.text(c.result, colX[1] + 8, y + 7, { width: 130 });
-      const statusColor = c.status === 'pass' ? '#1E8E3E' : c.status === 'warn' ? '#E8A33D' : '#D93025';
-      const statusLabel = c.status === 'pass' ? '✓ Pass' : c.status === 'warn' ? '⚠ Caution' : '✗ Fail';
-      doc.fillColor(statusColor).font('Helvetica-Bold').text(statusLabel, colX[2] + 8, y + 7);
+      const bg = i % 2 === 0 ? '#FFFFFF' : C.lightBg;
+      doc.rect(marginX, y, contentW, rowH).fillAndStroke(bg, C.border);
+      doc.fillColor(C.text).fontSize(8.5).font('Helvetica');
+      doc.text(c.name, col1 + 8, y + 6, { width: 155 });
+      doc.text(c.result, col2 + 8, y + 6, { width: 160 });
+      const sc = statusColor(c.status);
+      doc.circle(col3 + 12, y + 10, 4).fill(sc);
+      doc.fillColor(sc).font('Helvetica-Bold').fontSize(8.5).text(statusLabel(c.status), col3 + 22, y + 6);
       y += rowH;
     });
 
-    y += 24;
+    y += 18;
 
-    // Reasons
-    doc.fillColor(navy).fontSize(13).font('Helvetica-Bold').text('Why This Verdict — Full Breakdown', 40, y);
-    y += 20;
+    // Reasons (auto-shrink to fit one page)
+    doc.fillColor(C.navy).fontSize(11).font('Helvetica-Bold').text('Why This Verdict', marginX, y);
+    y += 16;
 
-    result.reasons.forEach((reason, i) => {
-      if (y > doc.page.height - 100) { doc.addPage(); y = 40; }
-      doc.fillColor(riskColor).fontSize(10).font('Helvetica-Bold').text(`${i + 1}.`, 40, y);
-      doc.fillColor('#222222').font('Helvetica').fontSize(10).text(reason, 60, y, { width: doc.page.width - 100 });
-      y = doc.y + 12;
-    });
+    const bottomLimit = doc.page.height - 40;
+    let fontSize = 9;
+    const estimateHeight = fs => {
+      doc.fontSize(fs).font('Helvetica');
+      return result.reasons.reduce((h, r) => h + doc.heightOfString(r, { width: contentW - 30 }) + 8, 0);
+    };
+    while (fontSize > 6.5 && y + estimateHeight(fontSize) > bottomLimit) fontSize -= 0.5;
 
-    doc.fontSize(8).fillColor('#888888').text(
-      'Report generated by Cymor Scam Shield | Developed by Legendary Smiley Cymor',
-      40, doc.page.height - 40, { width: doc.page.width - 80, align: 'center' }
-    );
+    for (let i = 0; i < result.reasons.length; i++) {
+      const reason = result.reasons[i];
+      doc.fontSize(fontSize).font('Helvetica');
+      const h = doc.heightOfString(reason, { width: contentW - 30 });
+      if (y + h > bottomLimit) {
+        doc.fillColor('#888888').fontSize(8).font('Helvetica-Oblique')
+          .text(`+ ${result.reasons.length - i} more finding(s) — view full details with /history in the bot.`, marginX + 24, y);
+        break;
+      }
+      doc.circle(marginX + 8, y + 6, 8).fill(vColor);
+      doc.fillColor('#ffffff').fontSize(7.5).font('Helvetica-Bold').text(String(i + 1), marginX + 5, y + 2, { width: 8, align: 'center' });
+      doc.fillColor(C.text).fontSize(fontSize).font('Helvetica').text(reason, marginX + 24, y, { width: contentW - 30 });
+      y = doc.y + 8;
+    }
+
+    // Footer
+    doc.rect(0, doc.page.height - 30, pageW, 30).fill(C.navy);
+    doc.fillColor('#AFC0D6').fontSize(7.5).font('Helvetica')
+      .text('Report generated by Cymor Scam Shield  |  Developed by Legendary Smiley Cymor', 0, doc.page.height - 20, { width: pageW, align: 'center' });
 
     doc.end();
     stream.on('finish', () => resolve(filePath));
